@@ -60,17 +60,22 @@ setgovernors () {
 
 runtest () {
 	BNRTHROTT=$(grep nr_throttled ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
+	BTHROTT=$(grep throttled_time ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
 	BUSAGE=$(cat ${CGROUPDIR}/${CGROUP}/cpuacct.usage)
 
 	#####  RUN TEST #####
-	ITERATIONS=$(./fibtest -t "$THREADS" -s 5 | awk -F': ' '{print $2}' )
-	echo "Iterations Completed(M): $ITERATIONS"
+	TEST_SECONDS=5
+	ITERATIONS=$(./fibtest -f 0 -t "$THREADS" -s ${TEST_SECONDS} | awk -F': ' '{print $2}' )
+	echo "Iterations Completed(K): $ITERATIONS (expected: $(( ${TEST_SECONDS} * 10 )))"
 	ANRTHROTT=$(grep nr_throttled ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
+	ATHROTT=$(grep throttled_time ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
 	AUSAGE=$(cat ${CGROUPDIR}/${CGROUP}/cpuacct.usage)
 	DNRTHROTT=$(( ANRTHROTT - BNRTHROTT ))
+	DTHROTT=$(( ATHROTT - BTHROTT ))
 	DUSAGE=$(( AUSAGE - BUSAGE ))
-	echo "Throttled for: $DNRTHROTT "
-	echo "CPU Usage (msecs) = $((DUSAGE / 1000000 ))"
+	echo "CPU Usage (msecs) = $(( DUSAGE / 1000000 ))"
+	echo "Throttled time (msecs) = $(( DTHROTT / 1000000 )) (should be zero)"
+	echo "Throttled for $DNRTHROTT periods (should be zero)"
 }
 
 
@@ -81,6 +86,12 @@ setgovernors performance performance
 # Create CGROUP
 if [ ! -d ${CGROUPDIR}/${CGROUP} ] ; then
 	sudo mkdir -p ${CGROUPDIR}/${CGROUP} || exit $?
+fi
+
+if (( $(cat ${CGROUPDIR}/${CGROUP}/cpu.cfs_period_us ) != $(( $QUOTA * 10 )) )); then
+	echo cpu.cfs_period_us is "$(cat ${CGROUPDIR}/${CGROUP}/cpu.cfs_period_us)" instead of expected "$(( $QUOTA * 10 ))" >&2
+	QUOTA=$(( $(cat ${CGROUPDIR}/${CGROUP}/cpu.cfs_period_us ) / 10 ))
+	echo adjusting quota to ${QUOTA} us
 fi
 
 # Set the CPU quota
