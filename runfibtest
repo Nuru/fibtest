@@ -17,7 +17,9 @@
 
 CGROUP=user.slice/fibtest
 CGROUPDIR=/sys/fs/cgroup/cpu,cpuacct
-typeset -i BNRTHROTT ANRTHROTT DNRTHROTT AUSAGE BUSAGE DUSAGE THREADS NRCPUS THREADEDIT THREADEDTIME THREADEDTHROT SINGLEIT SINGLETIME SINGLETHROT
+typeset -i NRCPUS THREADS QUOTA TEST_SECONDS
+typeset -i THREADEDIT THREADEDTIME THREADEDTHROT SINGLEIT SINGLETIME SINGLETHROT
+typeset -i BNRPERIODS ANRPERIODS DNRPERIODS BNRTHROTT ANRTHROTT DNRTHROTT AUSAGE BUSAGE DUSAGE
 NRCPUS=$(getconf _NPROCESSORS_ONLN)
 THREADS=${1:-NRCPUS}
 QUOTA=$(( 10000 ))
@@ -59,18 +61,33 @@ setgovernors () {
 }
 
 runtest () {
+	BNRPERIODS=$(grep nr_periods ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
 	BNRTHROTT=$(grep nr_throttled ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
+	BTHROTT=$(grep throttled_time ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
 	BUSAGE=$(cat ${CGROUPDIR}/${CGROUP}/cpuacct.usage)
 
 	#####  RUN TEST #####
-	ITERATIONS=$(./fibtest -t "$THREADS" -s 5 | awk -F': ' '{print $2}' )
-	echo "Iterations Completed(M): $ITERATIONS"
+	TEST_SECONDS=5
+	ITERATIONS=$(./fibtest -f 0 -t "${THREADS}" -s ${TEST_SECONDS} | awk -F': ' '{print $2}' )
+	echo "Iterations Completed(K): $ITERATIONS (expected: $(( TEST_SECONDS * 10 * THREADS )) +/- ${THREADS})"
+	ANRPERIODS=$(grep nr_periods ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
 	ANRTHROTT=$(grep nr_throttled ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
+	ATHROTT=$(grep throttled_time ${CGROUPDIR}/${CGROUP}/cpu.stat | awk '{print $2}')
 	AUSAGE=$(cat ${CGROUPDIR}/${CGROUP}/cpuacct.usage)
+	DNRPERIODS=$(( ANRPERIODS - BNRPERIODS ))
 	DNRTHROTT=$(( ANRTHROTT - BNRTHROTT ))
+	DTHROTT=$(( ATHROTT - BTHROTT ))
 	DUSAGE=$(( AUSAGE - BUSAGE ))
-	echo "Throttled for: $DNRTHROTT "
-	echo "CPU Usage (msecs) = $((DUSAGE / 1000000 ))"
+	echo "CPU Usage (msecs) = $(( DUSAGE / 1000000 )) (test invalid unless this is much less than $(( TEST_SECONDS * 100 )))"
+	echo "Throttled time (msecs) = $(( DTHROTT / 1000000 )) (should be zero)"
+	echo "Throttled for $DNRTHROTT periods (should be zero)"
+	# echo "Reported elapsed CFS periods = ${DNRPERIODS}"
+	if (( DNRTHROTT > 1 )) || (( DTHROTT > 5000000 )); then
+		echo "EXCESSIVE THROTTLING DETECTED" >&2
+		return 1
+	else
+		echo 'CFS "low cpu usage with high throttling" bug NOT detected'
+	fi
 }
 
 
@@ -83,17 +100,26 @@ if [ ! -d ${CGROUPDIR}/${CGROUP} ] ; then
 	sudo mkdir -p ${CGROUPDIR}/${CGROUP} || exit $?
 fi
 
+if (( $(cat ${CGROUPDIR}/${CGROUP}/cpu.cfs_period_us ) != $(( $QUOTA * 10 )) )); then
+	echo cpu.cfs_period_us is "$(cat ${CGROUPDIR}/${CGROUP}/cpu.cfs_period_us)" instead of expected "$(( $QUOTA * 10 ))" >&2
+	QUOTA=$(( $(cat ${CGROUPDIR}/${CGROUP}/cpu.cfs_period_us ) / 10 ))
+	echo adjusting quota to ${QUOTA} us
+fi
+
 # Set the CPU quota
-sudo sh -c "echo $QUOTA > ${CGROUPDIR}/${CGROUP}/cpu.cfs_quota_us"
+sudo sh -c "echo $(( QUOTA * THREADS )) > ${CGROUPDIR}/${CGROUP}/cpu.cfs_quota_us"
 sudo sh -c "echo $$ >> ${CGROUPDIR}/${CGROUP}/tasks"
 
 # ****************** RUN THE TEST ***************
 # Uses Number of CPUs 
 runtest 
-# 
+exit_status=$?
+#
 THREADEDIT=${ITERATIONS}
 
 
 # ***********************************************
 
 setgovernors "${OLDGOV}" "${OLDENERGY}"
+
+exit $exit_status

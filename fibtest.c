@@ -143,7 +143,7 @@ int main(int argc, char *argv[])
 		total += tinfo[tnum].iterations;
 	}	
 
-	printf("Iterations Completed(M): %lu \n", total/1000000 );
+	printf("Iterations Completed(K): %lu \n", total/1000 );
 	free(tinfo);
 	exit(0);
 }
@@ -189,7 +189,7 @@ static void *slow( void *arg)
 	return (void *)tinfo;
 }
 
-// Runs the fibonacci sequence 1 million iterations before checking if we've timed out.
+// Runs the fibonacci until we've timed out.
 static void *fast( void *arg) 
 {
 	struct thread_info *tinfo = arg;
@@ -200,13 +200,10 @@ static void *fast( void *arg)
 
 	while( ! done() )
 	{
-		for(int j=0; j< 1000000; j++)
-		{
-			i++;
-			c=a+b;
-			a=b;
-			b=c;
-		}
+		i++;
+		c=a+b;
+		a=b;
+		b=c;
 	}
 	// We've timed out.
 	tinfo->iterations=i;
